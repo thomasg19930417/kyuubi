@@ -1388,6 +1388,30 @@ object KyuubiConf {
       .booleanConf
       .createWithDefault(false)
 
+  val ENGINE_INITIALIZE_SQL_TYPE: ConfigEntry[String] =
+    buildConf("kyuubi.engine.initialize.sql.type")
+      .doc(s"When set kyuubi.engine.initialize.sql.type=${InitSqlType.PATH}" +
+        s",you can use the hdfs file path  set kyuubi.engine.session.initialize.sql " +
+        s"and kyuubi.engine.initialize.sql")
+      .version("1.7.0")
+      .stringConf
+      .createWithDefaultString(InitSqlType.SQL.toString)
+
+  object InitSqlType extends Enumeration with Logging {
+    type InitSqlType = Value
+    val SQL, PATH, UNKNOWN = Value
+
+    def apply(sqlType: String): InitSqlType = {
+      sqlType.toUpperCase(Locale.ROOT) match {
+        case "SQL" => SQL
+        case "PATH" => PATH
+        case other =>
+          warn(s"Unsupported type: $sqlType, using UNKNOWN instead")
+          UNKNOWN
+      }
+    }
+  }
+
   val SESSION_ENGINE_STARTUP_MAX_LOG_LINES: ConfigEntry[Int] =
     buildConf("kyuubi.session.engine.startup.maxLogLines")
       .doc("The maximum number of engine log lines when errors occur during the engine" +
@@ -2426,6 +2450,14 @@ object KyuubiConf {
       .stringConf
       .toSequence()
       .createWithDefault(Nil)
+
+  val SERVER_PERIODIC_GC_INTERVAL: ConfigEntry[Long] =
+    buildConf("kyuubi.server.periodicGC.interval")
+      .doc("How often to trigger a garbage collection.")
+      .version("1.7.0")
+      .serverOnly
+      .timeConf
+      .createWithDefaultString("PT30M")
 
   val ENGINE_JDBC_CONNECTION_PROVIDER: OptionalConfigEntry[String] =
     buildConf("kyuubi.engine.jdbc.connection.provider")

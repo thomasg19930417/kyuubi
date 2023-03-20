@@ -522,6 +522,11 @@ public class KyuubiCommands extends Commands {
             "Console reader not initialized. This could happen when there "
                 + "is a multi-line command using -e option and which requires further reading from console");
       }
+
+      if (beeLine.getOpts().getInitFiles() != null) {
+        beeLine.initializeConsoleReader(null);
+      }
+
       if (beeLine.getOpts().isSilent() && beeLine.getOpts().getScriptFile() != null) {
         extra = beeLine.getConsoleReader().readLine(null, mask);
       } else {

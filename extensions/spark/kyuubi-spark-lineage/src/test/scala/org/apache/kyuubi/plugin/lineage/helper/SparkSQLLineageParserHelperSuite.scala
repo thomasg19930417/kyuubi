@@ -28,7 +28,7 @@ import org.apache.spark.sql.sources.{BaseRelation, InsertableRelation, SchemaRel
 import org.apache.spark.sql.types.{IntegerType, StringType, StructType}
 
 import org.apache.kyuubi.KyuubiFunSuite
-import org.apache.kyuubi.plugin.lineage.events.Lineage
+import org.apache.kyuubi.plugin.lineage.{Lineage, LineageDDL}
 import org.apache.kyuubi.plugin.lineage.helper.SparkListenerHelper.isSparkVersionAtMost
 
 class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
@@ -75,7 +75,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
       spark.sql("create view alterviewascommand as select key from test_db0.test_table0")
       val ret0 =
         exectractLineage("alter view alterviewascommand as select key from test_db0.test_table0")
-      assert(ret0 == Lineage(
+      assert(ret0._2 == Lineage(
         List("test_db0.test_table0"),
         List("default.alterviewascommand"),
         List(("default.alterviewascommand.key", Set("test_db0.test_table0.key")))))
@@ -84,7 +84,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
       val ret1 =
         exectractLineage("alter view alterviewascommand1 as select * from test_db0.test_table0")
 
-      assert(ret1 == Lineage(
+      assert(ret1._2 == Lineage(
         List("test_db0.test_table0"),
         List("default.alterviewascommand1"),
         List(
@@ -104,7 +104,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
       val result = exectractLineage(
         "create view test_view(a, b, c) as" +
           " select col1 as a, col2 as b, col3 as c from v2_catalog.db.tbb")
-      assert(result == Lineage(
+      assert(result._2 == Lineage(
         List("v2_catalog.db.tbb"),
         List("default.test_view"),
         List(
@@ -125,7 +125,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
         exectractLineage(
           s"insert into table v2_catalog.db.tb0 " +
             s"select key as col1, value as col2 from test_db0.test_table0")
-      assert(ret0 == Lineage(
+      assert(ret0._2 == Lineage(
         List("test_db0.test_table0"),
         List("v2_catalog.db.tb0"),
         List(
@@ -136,7 +136,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
         exectractLineage(
           s"insert overwrite table v2_catalog.db.tb0 partition(col2) " +
             s"select key as col1, value as col2 from test_db0.test_table0")
-      assert(ret1 == Lineage(
+      assert(ret1._2 == Lineage(
         List("test_db0.test_table0"),
         List("v2_catalog.db.tb0"),
         List(
@@ -147,7 +147,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
         exectractLineage(
           s"insert overwrite table v2_catalog.db.tb0 partition(col2 = 'bb') " +
             s"select key as col1 from test_db0.test_table0")
-      assert(ret2 == Lineage(
+      assert(ret2._2 == Lineage(
         List("test_db0.test_table0"),
         List("v2_catalog.db.tb0"),
         List(
@@ -172,7 +172,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
         "  UPDATE SET target.name = source.name, target.price = source.price " +
         "WHEN NOT MATCHED THEN " +
         "  INSERT (id, name, price) VALUES (source.id, source.name, source.price)")
-      assert(ret0 == Lineage(
+      assert(ret0._2 == Lineage(
         List("v2_catalog.db.source_t"),
         List("v2_catalog.db.target_t"),
         List(
@@ -187,7 +187,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
         "  UPDATE SET * " +
         "WHEN NOT MATCHED THEN " +
         "  INSERT *")
-      assert(ret1 == Lineage(
+      assert(ret1._2 == Lineage(
         List("v2_catalog.db.source_t"),
         List("v2_catalog.db.target_t"),
         List(
@@ -204,7 +204,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
         "WHEN NOT MATCHED THEN " +
         "  INSERT *")
 
-      assert(ret2 == Lineage(
+      assert(ret2._2 == Lineage(
         List("v2_catalog.db.source_t", "v2_catalog.db.pivot_t"),
         List("v2_catalog.db.target_t"),
         List(
@@ -219,7 +219,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
     withView("createviewcommand", "createviewcommand1", "createviewcommand2") { _ =>
       val ret0 = exectractLineage(
         "create view createviewcommand(a, b) as select key, value from test_db0.test_table0")
-      assert(ret0 == Lineage(
+      assert(ret0._2 == Lineage(
         List("test_db0.test_table0"),
         List("default.createviewcommand"),
         List(
@@ -228,7 +228,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
 
       val ret1 = exectractLineage(
         "create view createviewcommand1 as select key, value from test_db0.test_table0")
-      assert(ret1 == Lineage(
+      assert(ret1._2 == Lineage(
         List("test_db0.test_table0"),
         List("default.createviewcommand1"),
         List(
@@ -237,7 +237,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
 
       val ret2 = exectractLineage(
         "create view createviewcommand2 as select * from test_db0.test_table0")
-      assert(ret2 == Lineage(
+      assert(ret2._2 == Lineage(
         List("test_db0.test_table0"),
         List("default.createviewcommand2"),
         List(
@@ -252,7 +252,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
         val ret0 =
           exectractLineage("create table createdatasourcetableasselectcommand using parquet" +
             " AS SELECT key, value FROM test_db0.test_table0")
-        assert(ret0 == Lineage(
+        assert(ret0._2 == Lineage(
           List("test_db0.test_table0"),
           List("default.createdatasourcetableasselectcommand"),
           List(
@@ -264,7 +264,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
         val ret1 =
           exectractLineage("create table createdatasourcetableasselectcommand1 using parquet" +
             " AS SELECT * FROM test_db0.test_table0")
-        assert(ret1 == Lineage(
+        assert(ret1._2 == Lineage(
           List("test_db0.test_table0"),
           List("default.createdatasourcetableasselectcommand1"),
           List(
@@ -279,7 +279,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
     withTable("createhivetableasselectcommand", "createhivetableasselectcommand1") { _ =>
       val ret0 = exectractLineage("create table createhivetableasselectcommand using hive" +
         " as select key, value from test_db0.test_table0")
-      assert(ret0 == Lineage(
+      assert(ret0._2 == Lineage(
         List("test_db0.test_table0"),
         List("default.createhivetableasselectcommand"),
         List(
@@ -288,7 +288,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
 
       val ret1 = exectractLineage("create table createhivetableasselectcommand1 using hive" +
         " as select * from test_db0.test_table0")
-      assert(ret1 == Lineage(
+      assert(ret1._2 == Lineage(
         List("test_db0.test_table0"),
         List("default.createhivetableasselectcommand1"),
         List(
@@ -303,7 +303,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
         exectractLineage(
           "create table optimizedcreatehivetableasselectcommand stored as parquet " +
             "as select * from test_db0.test_table0")
-      assert(ret == Lineage(
+      assert(ret._2 == Lineage(
         List("test_db0.test_table0"),
         List("default.optimizedcreatehivetableasselectcommand"),
         List(
@@ -320,7 +320,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
       "v2_catalog.db.createhivetableasselectcommand1") { _ =>
       val ret0 = exectractLineage("create table v2_catalog.db.createhivetableasselectcommand" +
         " as select key, value from test_db0.test_table0")
-      assert(ret0 == Lineage(
+      assert(ret0._2 == Lineage(
         List("test_db0.test_table0"),
         List("v2_catalog.db.createhivetableasselectcommand"),
         List(
@@ -331,7 +331,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
 
       val ret1 = exectractLineage("create table v2_catalog.db.createhivetableasselectcommand1" +
         " as select * from test_db0.test_table0")
-      assert(ret1 == Lineage(
+      assert(ret1._2 == Lineage(
         List("test_db0.test_table0"),
         List("v2_catalog.db.createhivetableasselectcommand1"),
         List(
@@ -365,7 +365,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
       val ret0 =
         exectractLineage(
           s"insert into table  $tableName select key, value from test_db0.test_table0")
-      assert(ret0 == Lineage(
+      assert(ret0._2 == Lineage(
         List("test_db0.test_table0"),
         List("default.insertintodatasourcecommand"),
         List(
@@ -375,7 +375,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
       val ret1 =
         exectractLineage(
           s"insert into table  $tableName select * from test_db0.test_table0")
-      assert(ret1 == Lineage(
+      assert(ret1._2 == Lineage(
         List("test_db0.test_table0"),
         List("default.insertintodatasourcecommand"),
         List(
@@ -387,7 +387,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
           s"insert into table  $tableName " +
             s"select (select key from test_db0.test_table1 limit 1) + 1 as aa, " +
             s"value as bb from test_db0.test_table0")
-      assert(ret2 == Lineage(
+      assert(ret2._2 == Lineage(
         List("test_db0.test_table1", "test_db0.test_table0"),
         List("default.insertintodatasourcecommand"),
         List(
@@ -405,7 +405,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
         exectractLineage(
           s"insert into table $tableName select key, value from test_db0.test_table0")
 
-      assert(ret0 == Lineage(
+      assert(ret0._2 == Lineage(
         List("test_db0.test_table0"),
         List("default.insertintohadoopfsrelationcommand"),
         List(
@@ -422,7 +422,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
                                    |INSERT OVERWRITE DIRECTORY '$directory.path'
                                    |USING parquet
                                    |SELECT * FROM test_db0.test_table_part0""".stripMargin)
-    assert(ret0 == Lineage(
+    assert(ret0._2 == Lineage(
       List("test_db0.test_table_part0"),
       List(s"""`$directory.path`"""),
       List(
@@ -438,7 +438,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
                                    |INSERT OVERWRITE DIRECTORY '$directory.path'
                                    |USING parquet
                                    |SELECT * FROM test_db0.test_table_part0""".stripMargin)
-    assert(ret0 == Lineage(
+    assert(ret0._2 == Lineage(
       List("test_db0.test_table_part0"),
       List(s"""`$directory.path`"""),
       List(
@@ -455,7 +455,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
         exectractLineage(
           s"insert into table $tableName select * from test_db0.test_table0")
 
-      assert(ret0 == Lineage(
+      assert(ret0._2 == Lineage(
         List("test_db0.test_table0"),
         List(s"default.$tableName"),
         List(
@@ -467,7 +467,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
 
   test("columns lineage extract - logical relation sql") {
     val ret0 = exectractLineage("select key, value from test_db0.test_table0")
-    assert(ret0 == Lineage(
+    assert(ret0._2 == Lineage(
       List("test_db0.test_table0"),
       List(),
       List(
@@ -475,7 +475,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
         ("value", Set("test_db0.test_table0.value")))))
 
     val ret1 = exectractLineage("select * from test_db0.test_table_part0")
-    assert(ret1 == Lineage(
+    assert(ret1._2 == Lineage(
       List("test_db0.test_table_part0"),
       List(),
       List(
@@ -487,7 +487,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
 
   test("columns lineage extract - not generate lineage sql") {
     val ret0 = exectractLineage("create table test_table1(a string, b string, c string)")
-    assert(ret0 == Lineage(List[String](), List[String](), List[(String, Set[String])]()))
+    assert(ret0._2 == Lineage(List[String](), List[String](), List[(String, Set[String])]()))
   }
 
   test("columns lineage extract - data source V2 sql") {
@@ -500,14 +500,14 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
     withTable("v2_catalog.db.tb") { _ =>
       val sql0 = "select col1 from v2_catalog.db.tb"
       val ret0 = exectractLineage(sql0)
-      assert(ret0 == Lineage(
+      assert(ret0._2 == Lineage(
         List("v2_catalog.db.tb"),
         List(),
         List("col1" -> Set("v2_catalog.db.tb.col1"))))
 
       val sql1 = "select col1, hash(hash(col1)) as col2 from v2_catalog.db.tb"
       val ret1 = exectractLineage(sql1)
-      assert(ret1 == Lineage(
+      assert(ret1._2 == Lineage(
         List("v2_catalog.db.tb"),
         List(),
         List("col1" -> Set("v2_catalog.db.tb.col1"), "col2" -> Set("v2_catalog.db.tb.col1"))))
@@ -515,7 +515,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
       val sql2 =
         "select col1, case col1 when '1' then 's1' else col1 end col2 from v2_catalog.db.tb"
       val ret2 = exectractLineage(sql2)
-      assert(ret2 == Lineage(
+      assert(ret2._2 == Lineage(
         List("v2_catalog.db.tb"),
         List(),
         List("col1" -> Set("v2_catalog.db.tb.col1"), "col2" -> Set("v2_catalog.db.tb.col1"))))
@@ -524,7 +524,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
         "select col1 as col2, 'col2' as col2, 'col2', first(col3) as col2 " +
           "from v2_catalog.db.tb group by col1"
       val ret3 = exectractLineage(sql3)
-      assert(ret3 == Lineage(
+      assert(ret3._2 == Lineage(
         List("v2_catalog.db.tb"),
         List[String](),
         List(
@@ -537,7 +537,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
         "select col1 as col2, sum(hash(col1) + hash(hash(col1))) " +
           "from v2_catalog.db.tb group by col1"
       val ret4 = exectractLineage(sql4)
-      assert(ret4 == Lineage(
+      assert(ret4._2 == Lineage(
         List("v2_catalog.db.tb"),
         List(),
         List(
@@ -553,7 +553,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
            |  group by 1
            |""".stripMargin
       val ret5 = exectractLineage(sql5)
-      assert(ret5 == Lineage(
+      assert(ret5._2 == Lineage(
         List("v2_catalog.db.tb"),
         List(),
         List(
@@ -596,9 +596,9 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
           "tmp1_1" -> Set("default.tmp1.tmp1_1")))
 
       val ret0 = exectractLineage(sql0)
-      assert(ret0 == sql0ExpectResult)
+      assert(ret0._2 == sql0ExpectResult)
       val ret1 = exectractLineage(sql1)
-      assert(ret1 == sql1ExpectResult)
+      assert(ret1._2 == sql1ExpectResult)
     }
   }
 
@@ -658,7 +658,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
           |LIMIT 10""".stripMargin
 
       val ret0 = exectractLineage(sql0)
-      assert(ret0 == Lineage(
+      assert(ret0._2 == Lineage(
         List(
           "test_db.goods_detail0",
           "v2_catalog.test_db_v2.goods_detail1",
@@ -693,7 +693,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
 
       val ret0 = exectractLineage(sql0)
       assert(
-        ret0 == Lineage(
+        ret0._2 == Lineage(
           List("v2_catalog.db.tb1", "v2_catalog.db.tb2"),
           List(),
           List(
@@ -727,7 +727,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
           |) a
           |""".stripMargin
       val ret0 = exectractLineage(sql0)
-      assert(ret0 == Lineage(
+      assert(ret0._2 == Lineage(
         List("test_db.test_table0", "test_db.test_table1"),
         List(),
         List(
@@ -768,7 +768,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
           |stat_date, channel_id, sub_channel_id, user_type, country_name
           |""".stripMargin
       val ret0 = exectractLineage(sql0)
-      assert(ret0 == Lineage(
+      assert(ret0._2 == Lineage(
         List("test_db.test_order_item"),
         List(),
         List(
@@ -806,7 +806,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
           |GROUP BY a.channel_id, a.sub_channel_id, a.country_name
           |""".stripMargin
       val ret1 = exectractLineage(sql1)
-      assert(ret1 == Lineage(
+      assert(ret1._2 == Lineage(
         List("test_db.test_order_item", "test_db.test_p0_order_item"),
         List(),
         List(
@@ -832,7 +832,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
   test("columns lineage extract - agg sql") {
     val sql0 = """select key as a, count(*) as b, 1 as c from test_db0.test_table0 group by key"""
     val ret0 = exectractLineage(sql0)
-    assert(ret0 == Lineage(
+    assert(ret0._2 == Lineage(
       List("test_db0.test_table0"),
       List(),
       List(
@@ -842,7 +842,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
 
     val sql1 = """select count(*) as a, 1 as b from test_db0.test_table0"""
     val ret1 = exectractLineage(sql1)
-    assert(ret1 == Lineage(
+    assert(ret1._2 == Lineage(
       List("test_db0.test_table0"),
       List(),
       List(
@@ -851,7 +851,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
 
     val sql2 = """select every(key == 1) as a, 1 as b from test_db0.test_table0"""
     val ret2 = exectractLineage(sql2)
-    assert(ret2 == Lineage(
+    assert(ret2._2 == Lineage(
       List("test_db0.test_table0"),
       List(),
       List(
@@ -860,7 +860,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
 
     val sql3 = """select count(*) as a, 1 as b from test_db0.test_table0"""
     val ret3 = exectractLineage(sql3)
-    assert(ret3 == Lineage(
+    assert(ret3._2 == Lineage(
       List("test_db0.test_table0"),
       List(),
       List(
@@ -869,7 +869,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
 
     val sql4 = """select first(key) as a, 1 as b from test_db0.test_table0"""
     val ret4 = exectractLineage(sql4)
-    assert(ret4 == Lineage(
+    assert(ret4._2 == Lineage(
       List("test_db0.test_table0"),
       List(),
       List(
@@ -878,7 +878,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
 
     val sql5 = """select avg(key) as a, 1 as b from test_db0.test_table0"""
     val ret5 = exectractLineage(sql5)
-    assert(ret5 == Lineage(
+    assert(ret5._2 == Lineage(
       List("test_db0.test_table0"),
       List(),
       List(
@@ -889,7 +889,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
       """select count(value) + sum(key) as a,
         | 1 as b from test_db0.test_table0""".stripMargin
     val ret6 = exectractLineage(sql6)
-    assert(ret6 == Lineage(
+    assert(ret6._2 == Lineage(
       List("test_db0.test_table0"),
       List(),
       List(
@@ -898,7 +898,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
 
     val sql7 = """select count(*) + sum(key) as a, 1 as b from test_db0.test_table0"""
     val ret7 = exectractLineage(sql7)
-    assert(ret7 == Lineage(
+    assert(ret7._2 == Lineage(
       List("test_db0.test_table0"),
       List(),
       List(
@@ -921,7 +921,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
           |select b.a as aa, t0_cached.b0 as bb from t0_cached join table1 b on b.a = t0_cached.a0
           |""".stripMargin
       val ret0 = exectractLineage(sql0)
-      assert(ret0 == Lineage(
+      assert(ret0._2 == Lineage(
         List("default.table1", "default.table0"),
         List(),
         List(
@@ -934,7 +934,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
       val df = df0.join(df1).select(df0("a0").alias("aa"), df1("b").alias("bb"))
       val optimized = df.queryExecution.optimizedPlan
       val ret1 = SparkSQLLineageParseHelper(spark).transformToLineage(0, optimized).get
-      assert(ret1 == Lineage(
+      assert(ret1._2 == Lineage(
         List("default.table0", "default.table1"),
         List(),
         List(
@@ -956,7 +956,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
           |select a as aa, bb, cc from (select b as bb, c as cc from table1) t0, table0
           |""".stripMargin
       val ret0 = exectractLineage(sql0)
-      assert(ret0 == Lineage(
+      assert(ret0._2 == Lineage(
         List("default.table0", "default.table1"),
         List(),
         List(
@@ -969,7 +969,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
           |select (select a from table1) as aa, b as bb from table1
           |""".stripMargin
       val ret1 = exectractLineage(sql1)
-      assert(ret1 == Lineage(
+      assert(ret1._2 == Lineage(
         List("default.table1"),
         List(),
         List(
@@ -981,7 +981,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
           |select (select count(*) from table0) as aa, b as bb from table1
           |""".stripMargin
       val ret2 = exectractLineage(sql2)
-      assert(ret2 == Lineage(
+      assert(ret2._2 == Lineage(
         List("default.table0", "default.table1"),
         List(),
         List(
@@ -994,7 +994,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
           |select * from table0 where table0.a in (select a from table1)
           |""".stripMargin
       val ret3 = exectractLineage(sql3)
-      assert(ret3 == Lineage(
+      assert(ret3._2 == Lineage(
         List("default.table0"),
         List(),
         List(
@@ -1008,7 +1008,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
           |select * from table0 where exists (select * from table1 where table0.c = table1.c)
           |""".stripMargin
       val ret4 = exectractLineage(sql4)
-      assert(ret4 == Lineage(
+      assert(ret4._2 == Lineage(
         List("default.table0"),
         List(),
         List(
@@ -1021,7 +1021,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
           |select * from table0 where exists (select * from table1 where c = "odone")
           |""".stripMargin
       val ret5 = exectractLineage(sql5)
-      assert(ret5 == Lineage(
+      assert(ret5._2 == Lineage(
         List("default.table0"),
         List(),
         List(
@@ -1034,7 +1034,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
           |select * from table0 where not exists (select * from table1 where c = "odone")
           |""".stripMargin
       val ret6 = exectractLineage(sql6)
-      assert(ret6 == Lineage(
+      assert(ret6._2 == Lineage(
         List("default.table0"),
         List(),
         List(
@@ -1047,7 +1047,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
           |select * from table0 where table0.a not in (select a from table1)
           |""".stripMargin
       val ret7 = exectractLineage(sql7)
-      assert(ret7 == Lineage(
+      assert(ret7._2 == Lineage(
         List("default.table0"),
         List(),
         List(
@@ -1060,7 +1060,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
           |select (select a from table1) + 1, b as bb from table1
           |""".stripMargin
       val ret8 = exectractLineage(sql8)
-      assert(ret8 == Lineage(
+      assert(ret8._2 == Lineage(
         List("default.table1"),
         List(),
         List(
@@ -1072,7 +1072,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
           |select (select a from table1 limit 1) + 1 as aa, b as bb from table1
           |""".stripMargin
       val ret9 = exectractLineage(sql9)
-      assert(ret9 == Lineage(
+      assert(ret9._2 == Lineage(
         List("default.table1"),
         List(),
         List(
@@ -1085,7 +1085,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
           | b as bb from table1
           |""".stripMargin
       val ret10 = exectractLineage(sql10)
-      assert(ret10 == Lineage(
+      assert(ret10._2 == Lineage(
         List("default.table1", "default.table0"),
         List(),
         List(
@@ -1094,7 +1094,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
     }
   }
 
-  private def exectractLineageWithoutExecuting(sql: String): Lineage = {
+  private def exectractLineageWithoutExecuting(sql: String): (LineageDDL, Lineage) = {
     val parsed = spark.sessionState.sqlParser.parsePlan(sql)
     val analyzed = spark.sessionState.analyzer.execute(parsed)
     spark.sessionState.analyzer.checkAnalysis(analyzed)
@@ -1102,7 +1102,7 @@ class SparkSQLLineageParserHelperSuite extends KyuubiFunSuite
     SparkSQLLineageParseHelper(spark).transformToLineage(0, optimized).get
   }
 
-  private def exectractLineage(sql: String): Lineage = {
+  private def exectractLineage(sql: String): (LineageDDL, Lineage) = {
     val parsed = spark.sessionState.sqlParser.parsePlan(sql)
     val qe = spark.sessionState.executePlan(parsed)
     val optimized = qe.optimizedPlan

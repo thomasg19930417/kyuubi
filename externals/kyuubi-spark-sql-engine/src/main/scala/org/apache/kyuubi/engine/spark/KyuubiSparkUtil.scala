@@ -16,17 +16,22 @@
  */
 
 package org.apache.kyuubi.engine.spark
-
+import java.io.{BufferedReader, InputStreamReader}
 import java.time.{Instant, LocalDateTime, ZoneId}
 
 import scala.annotation.meta.getter
+import scala.collection.mutable.ListBuffer
+import scala.util.control.NonFatal
 
+import org.apache.hadoop.fs.{FileSystem, FSDataInputStream, Path}
 import org.apache.spark.SparkContext
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.util.kvstore.KVIndex
 
 import org.apache.kyuubi.Logging
+import org.apache.kyuubi.config.KyuubiConf.{ENGINE_INITIALIZE_SQL_TYPE, InitSqlType}
 import org.apache.kyuubi.engine.SemanticVersion
+import org.apache.kyuubi.engine.spark.SparkSQLEngine.kyuubiConf
 
 object KyuubiSparkUtil extends Logging {
 
@@ -49,6 +54,53 @@ object KyuubiSparkUtil extends Logging {
       } finally {
         spark.sparkContext.clearJobGroup()
       }
+    }
+  }
+
+  def getInitializeSql(sparkSession: SparkSession, config: Seq[String]): Seq[String] = {
+
+    def getSqlTextFromFile(path: Option[String]): Seq[String] = {
+      path.map(filePath => {
+        var reader: BufferedReader = null
+        try {
+          info(s"load init sql from file: ${filePath}")
+          val engineInitSqlFilePath = new Path(filePath)
+          val hadoopConf = sparkSession.sparkContext.hadoopConfiguration
+          val fs: FileSystem = engineInitSqlFilePath.getFileSystem(hadoopConf)
+          if (fs.exists(engineInitSqlFilePath)) {
+            val sqlInputStream: FSDataInputStream = fs.open(engineInitSqlFilePath)
+            reader = new BufferedReader(new InputStreamReader(sqlInputStream))
+            // Filter out the sql using '--' comment
+            val sqlText = ListBuffer[String]()
+            Stream.continually(reader.readLine())
+              .takeWhile(null != _).filter(item => !item.startsWith("--") && item.length > 0)
+              .map(item => {
+                if (item.endsWith(";")) {
+                  item.substring(0, item.length - 1)
+                } else {
+                  item
+                }
+              }).foreach(item => sqlText.append(item))
+            sqlText.toSeq
+          } else {
+            Nil
+          }
+        } catch {
+          case NonFatal(e) =>
+            warn(s"Failed to initialize engine initialize sql file: ${e.getMessage}")
+            Nil
+        } finally {
+          if (null != reader) {
+            reader.close()
+          }
+        }
+      }).getOrElse(Nil)
+    }
+
+    if (kyuubiConf.get(ENGINE_INITIALIZE_SQL_TYPE) == InitSqlType.SQL.toString) {
+      config
+    } else {
+      getSqlTextFromFile(config.headOption)
     }
   }
 

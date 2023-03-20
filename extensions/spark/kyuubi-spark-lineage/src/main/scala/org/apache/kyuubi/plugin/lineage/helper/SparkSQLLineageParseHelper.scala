@@ -17,26 +17,35 @@
 
 package org.apache.kyuubi.plugin.lineage.helper
 
+import java.util.TimeZone
+
 import scala.collection.immutable.ListMap
 import scala.util.{Failure, Success, Try}
 
+import org.apache.commons.lang3.time.DateFormatUtils
+import org.apache.hadoop.security.UserGroupInformation
 import org.apache.spark.internal.Logging
+import org.apache.spark.kyuubi.lineage.{LineageConf, SparkContextHelper}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.TableIdentifier
 import org.apache.spark.sql.catalyst.analysis.{NamedRelation, PersistedView, ViewType}
 import org.apache.spark.sql.catalyst.catalog.{CatalogStorageFormat, CatalogTable, HiveTableRelation}
-import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeSet, Expression, NamedExpression}
-import org.apache.spark.sql.catalyst.expressions.ScalarSubquery
+import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeSet, Expression, NamedExpression, ScalarSubquery}
 import org.apache.spark.sql.catalyst.expressions.aggregate.Count
 import org.apache.spark.sql.catalyst.plans.{LeftAnti, LeftSemi}
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.connector.catalog.{CatalogPlugin, Identifier, TableCatalog}
 import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.execution.columnar.InMemoryRelation
+import org.apache.spark.sql.execution.command._
 import org.apache.spark.sql.execution.datasources.LogicalRelation
 import org.apache.spark.sql.execution.datasources.v2.{DataSourceV2Relation, DataSourceV2ScanRelation}
+import org.apache.spark.sql.hive.execution.{CreateHiveTableAsSelectCommand, OptimizedCreateHiveTableAsSelectCommand}
+import org.apache.spark.sql.types.{DataType, StructField, StructType}
 
-import org.apache.kyuubi.plugin.lineage.events.Lineage
+import org.apache.kyuubi.lineage.db.entity.{TableColumnInfo, TableInfo}
+import org.apache.kyuubi.lineage.db.entity.TableInfo.TableInfoBuilder
+import org.apache.kyuubi.plugin.lineage._
 import org.apache.kyuubi.plugin.lineage.helper.SparkListenerHelper.isSparkVersionAtMost
 
 trait LineageParser {
@@ -439,12 +448,134 @@ case class SparkSQLLineageParseHelper(sparkSession: SparkSession) extends Lineag
 
   def transformToLineage(
       executionId: Long,
-      plan: LogicalPlan): Option[Lineage] = {
-    Try(parse(plan)).recover {
+      plan: LogicalPlan): Option[(LineageDDL, Lineage)] = {
+    Try((parserDDl(plan), parse(plan))).recover {
       case e: Exception =>
         logWarning(s"Extract Statement[$executionId] columns lineage failed.", e)
         throw e
     }.toOption
+  }
+
+  def getOutSchema(outAtt: Seq[Attribute], tableDesc: CatalogTable): CatalogTable = {
+    val fields: Seq[StructField] =
+      outAtt.map(att => StructField(att.name, att.dataType, true, att.metadata))
+    val structType = StructType(fields)
+    var tableDescNew = tableDesc
+    if (tableDesc.dataSchema.fields.length <= 0) {
+      tableDescNew = tableDesc.copy(schema = structType)
+    }
+    tableDescNew
+  }
+
+  def parserDDl(logicPaln: LogicalPlan): LineageDDL = {
+    // 暂时只对hive相关的做处理
+    logicPaln match {
+      // create table
+      case plan: CreateTableCommand =>
+        LineageDDL(CreateTableOperator(transformToHiveTableInfo(plan.table)))
+      case plan: CreateHiveTableAsSelectCommand =>
+        val tableDesc = getOutSchema(plan.outputColumns, plan.tableDesc)
+        LineageDDL(CreateTableOperator(transformToHiveTableInfo(tableDesc)))
+      case plan: OptimizedCreateHiveTableAsSelectCommand =>
+        val tableDesc = getOutSchema(plan.outputColumns, plan.tableDesc)
+        LineageDDL(CreateTableOperator(transformToHiveTableInfo(tableDesc)))
+      case plan: CreateTableLikeCommand =>
+        LineageDDL(CreateTableLikeOperator(plan.sourceTable, plan.targetTable))
+
+      // drop table
+      case plan: DropTableCommand =>
+        LineageDDL(DropTableOperator(plan.tableName))
+
+      // alter table
+      case plan: AlterTableRenameCommand =>
+        LineageDDL(AlterTableRenameOperator(plan.oldName, plan.newName))
+
+      case plan: AlterTableAddColumnsCommand =>
+        val columns = plan.colsToAdd.map(transformToHiveTableColumnInfo(
+          false,
+          -1,
+          _,
+          getDateFromTimeStamp(System.currentTimeMillis())))
+        LineageDDL(AlterTableAddColumnsOperator(plan.table, columns.toArray))
+
+      case plan: AlterTableChangeColumnCommand =>
+        LineageDDL(AlterTableChangeColumnOperator(
+          plan.tableName,
+          plan.columnName,
+          transformToHiveTableColumnInfo(
+            false,
+            -1,
+            plan.newColumn,
+            getDateFromTimeStamp(System.currentTimeMillis()))))
+
+      case plan =>
+        if (plan.children.size <= 0) {
+          null
+        } else {
+          plan.children.map(parserDDl(_)).head
+        }
+
+    }
+  }
+
+  val userName = UserGroupInformation.getCurrentUser.getShortUserName
+  val dsId = SparkContextHelper.getConf(LineageConf.LINEAGE_REALM).toInt
+
+  def transformToHiveTableInfo(table: CatalogTable): TableInfo = {
+    val date = getDateFromTimeStamp(System.currentTimeMillis())
+    val tableInfo = new TableInfoBuilder().setDsId(dsId)
+      .setDatabaseName(table.identifier.database.getOrElse("default"))
+      .setTableEname(table.identifier.table)
+      .setTableCname(table.comment.getOrElse(""))
+      .setCreateTime(date)
+      .setUpdateTime(date)
+      .setDeleted(0)
+      .setPartition(table.partitionColumnNames.size > 0)
+      .setStorageCapacity("-1")
+      .setDataNum("-1")
+      .setDescription(table.comment.getOrElse(""))
+
+    Option(table.owner).filter(_.nonEmpty).orElse(Some(userName)).foreach(item => {
+      tableInfo.setTableOwner(item)
+    })
+
+    // table field
+    val dataColumnSchema: StructType = table.dataSchema
+    val partColumnSchema: StructType = table.partitionSchema
+
+    val dataColumns: Array[TableColumnInfo] = dataColumnSchema.fields.zipWithIndex.map(item =>
+      transformToHiveTableColumnInfo(false, item._2, item._1, date))
+
+    val partColumns: Array[TableColumnInfo] = partColumnSchema.fields.zipWithIndex.map(item =>
+      transformToHiveTableColumnInfo(true, item._2 + dataColumns.size, item._1, date))
+    import scala.collection.JavaConverters._
+    tableInfo.setTableColumnInfoList((dataColumns ++ partColumns).toList.asJava)
+    tableInfo.builder()
+  }
+
+  def transformToHiveTableColumnInfo(
+      isPartition: Boolean,
+      index: Int,
+      field: StructField,
+      date: String): TableColumnInfo = {
+
+    val dataType: DataType = field.dataType
+    val name: String = field.name
+    val maybeString: Option[String] = field.getComment()
+    val tableColumnInfo = new TableColumnInfo()
+    tableColumnInfo.setFieldEname(name)
+    tableColumnInfo.setFieldCname(maybeString.getOrElse(""))
+    tableColumnInfo.setFieldType(dataType.simpleString)
+    tableColumnInfo.setDeleted(0)
+    tableColumnInfo.setCreateTime(date)
+    tableColumnInfo.setUpdateTime(date)
+    tableColumnInfo.setIndex(index)
+    tableColumnInfo.setPartition(if (isPartition) 1 else 0)
+    tableColumnInfo
+  }
+
+  def getDateFromTimeStamp(time: Long): String = {
+    DateFormatUtils.format(time, "yyyy-MM-dd HH:mm:ss", TimeZone.getDefault)
   }
 
 }
